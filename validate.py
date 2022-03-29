@@ -35,39 +35,38 @@ def extract_predict(loader, model, proxies, criterion):
     val_acc = AverageMeter()
 
     copy = False
+    with torch.no_grad():
+        for i, (imgs, l) in enumerate(loader):
+            if len(imgs.shape) == 5:
+                batch_size, nviews = imgs.shape[0], imgs.shape[1]
+                imgs = imgs.view(batch_size * nviews, 3, 224, 224)
 
-    for i, (imgs, l) in enumerate(loader):
-        if len(imgs.shape) == 5:
-            batch_size, nviews = imgs.shape[0], imgs.shape[1]
-            imgs = imgs.view(batch_size * nviews, 3, 224, 224)
+                # hack to handle multiple gpus
+                # can crash if there are 0 im
+                if batch_size < 4:
+                    imgs = torch.cat([imgs, imgs], dim=0)
+                    l = torch.cat([l, l])
+                    copy = True
 
-            # hack to handle multiple gpus
-            # can crash if there are 0 im
-            if batch_size < 4:
-                imgs = torch.cat([imgs, imgs], dim=0)
-                l = torch.cat([l, l])
-                copy = True
+            labels.extend(l)
 
-        labels.extend(l)
+            if torch.cuda.is_available():
+                imgs = imgs.cuda()
+                l = l.cuda()
 
-        if torch.cuda.is_available():
-            imgs = imgs.cuda(async=True)
-            l = l.cuda(async=True)
+            if torch.cuda.device_count() > 1:
+                embs = model(imgs)
+            else:
+                embs = model(imgs)
 
-        imgs = Variable(imgs, volatile=True)
-        if torch.cuda.device_count() > 1:
-            embs = model(imgs)
-        else:
-            embs = model(imgs)
+            if copy:
+                embs = embs[:batch_size]
+                l = l[:batch_size]
 
-        if copy:
-            embs = embs[:batch_size]
-            l = l[:batch_size]
+            outputs.append(embs.data.cpu().numpy())
 
-        outputs.append(embs.data.cpu().numpy())
-
-        loss, acc = criterion(embs, l, proxies)
-        val_acc.update(acc, imgs.size(0))
+            loss, acc = criterion(embs, l, proxies)
+            val_acc.update(acc, imgs.size(0))
 
     return np.vstack(outputs), np.asarray(labels), val_acc.avg
 

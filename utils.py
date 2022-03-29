@@ -41,7 +41,7 @@ class AverageMeter(object):
 
 
 def to_numpy(x):
-    return x.cpu().data.numpy()[0]
+    return x.cpu().data.numpy()
 
 
 def get_backbone(args, pretrained=True):
