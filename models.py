@@ -83,10 +83,10 @@ class LinearProjection(nn.Module):
         return x
 
     def _init_params(self):
-        nn.init.xavier_normal(self.fc_embed.weight)
-        nn.init.constant(self.fc_embed.bias, 0)
-        nn.init.constant(self.bn1d.weight, 1)
-        nn.init.constant(self.bn1d.bias, 0)
+        nn.init.xavier_normal_(self.fc_embed.weight)
+        nn.init.constant_(self.fc_embed.bias, 0)
+        nn.init.constant_(self.bn1d.weight, 1)
+        nn.init.constant_(self.bn1d.bias, 0)
 
 
 class ConvNet(nn.Module):

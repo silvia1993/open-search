@@ -218,7 +218,7 @@ class DataLoader(Dataset):
 
 def get_proxies(path_semantic, class_names):
     try:
-        semantic = np.load(path_semantic, allow_pickle=True).item()
+        semantic = np.load(path_semantic, allow_pickle=True,encoding='bytes').item()
     except:
         if os.path.splitext(path_semantic)[-1] == '.npz':
             semantic = np.load(path_semantic)['wv'].item()
