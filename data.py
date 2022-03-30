@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 from utils import zero_cnames
-
+import pickle
+from PIL import Image
 
 def image_loader(path):
     return cv2.imread(path)[:, :, ::-1]
@@ -189,6 +190,32 @@ def create_multi_splits(path, domain, overwrite=False):
         splits[modality]['test'] = df_test
         splits[modality]['gal'] = df_test
     return splits
+
+
+class CifarDatasetWithDomain(Dataset):
+    """Cifar dataloader, output image, class target and domain for this sample"""
+
+    def __init__(self, image_path, class_label_path, domain_label_path, transform=None):
+        with open(image_path, 'rb') as f:
+            self.images = pickle.load(f)
+        with open(class_label_path, 'rb') as f:
+            self.class_label = pickle.load(f)
+        with open(domain_label_path, 'rb') as f:
+            self.domain_label = pickle.load(f)
+        self.transform = transform
+
+    def __getitem__(self, index):
+        img, class_label, domain_label = \
+            self.images[index], self.class_label[index], self.domain_label[index]
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, class_label#, domain_label
+
+    def __len__(self):
+        return len(self.class_label)
 
 
 class DataLoader(Dataset):

@@ -51,6 +51,20 @@ class ResNet50(nn.Module):
     def logits(self, x):
         return self.last_layer(x)
 
+class ResNet18(nn.Module):
+    def __init__(self, pretrained=True):
+        super(ResNet18, self).__init__()
+        model = models.resnet18(pretrained=pretrained)
+        layers = list(model.children())[:-1]
+        self.model = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # from 224x224 to 512
+        x = self.model(x)
+        return x.view(x.size(0), -1)
+
+    def logits(self, x):
+        return self.last_layer(x)
 
 class SEResNet50(nn.Module):
     def __init__(self, pretrained=True):

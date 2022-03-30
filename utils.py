@@ -45,9 +45,12 @@ def to_numpy(x):
 
 
 def get_backbone(args, pretrained=True):
-    from models import VGG16, VGG19, ResNet50, SEResNet50
+    from models import VGG16, VGG19, ResNet50, SEResNet50, ResNet18
 
-    if args.backbone == 'resnet':
+    if args.backbone == 'resnet18':
+        output_shape = 512
+        backbone = ResNet18(pretrained=False)
+    elif args.backbone == 'resnet50':
         output_shape = 2048
         backbone = ResNet50(pretrained=pretrained, kp=args.kp)
     elif args.backbone == 'vgg16':

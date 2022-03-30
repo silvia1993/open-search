@@ -11,12 +11,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision import transforms
 from data import create_splits, create_fewshot_splits, create_shape_splits
 from data import create_multi_splits
-from data import DataLoader, get_proxies
+from data import DataLoader, get_proxies, CifarDatasetWithDomain
 from models import LinearProjection, ConvNet
 from models import ProxyNet, ProxyLoss
 from utils import AverageMeter, to_numpy
 from utils import get_semantic_fname, get_backbone, random_transform
 from validate import extract_predict
+import pickle
 
 
 # Training settings
@@ -49,7 +50,7 @@ parser.add_argument('--dim_embed', type=int, default=300, metavar='N',
 parser.add_argument('--da', action='store_true', default=False,
                     help='data augmentation')
 parser.add_argument('--backbone', type=str, default='resnet',
-                    help='vgg16|vgg19|resnet|seresnet')
+                    help='vgg16|vgg19|resnet50|seresnet|resnet18')
 parser.add_argument('--word', type=str, default='word2vec',
                     help='Semantic space')
 # setup
@@ -59,16 +60,19 @@ parser.add_argument('--gzsl', action='store_true', default=False,
                     help='Generalized setting, only works for Sketchy and TUB')
 parser.add_argument('--shape', action='store_true', default=False,
                     help='3D shape recognition')
-parser.add_argument('--mode', type=str, required=True,
+parser.add_argument('--mode', type=str, default='',
                     help='im|sk')
 # plumbing
 parser.add_argument('--dataset', type=str, required=True,
-                    help='Sketchy|TU-Berlin|SHREC13|SHREC14|PART-SHREC14|domainnet')
+                    help='Sketchy|TU-Berlin|SHREC13|SHREC14|PART-SHREC14|domainnet|cifar-s')
 parser.add_argument('--overwrite', action='store_true', default=False,
                     help='zero-shot experiment')
 parser.add_argument('--data_dir', type=str, metavar='DD',
                     default='data',
                     help='data folder path')
+parser.add_argument('--data_path', type=str,
+                    default='/home/silvia/',
+                    help='path to data folder')
 parser.add_argument('--exp_dir', type=str, default='exp', metavar='ED',
                     help='folder for saving exp')
 parser.add_argument('--m', type=str, default='SBIR', metavar='M',
@@ -103,13 +107,19 @@ elif args.dataset in ['domainnet']:
         df_dir, domain=args.domain, overwrite=args.overwrite)
     df_train = splits[args.mode]['train']
     df_gal = splits[args.mode]['test']
+elif args.dataset == 'cifar-s':
+    pass
 else:
     splits = create_splits(df_dir, args.overwrite, args.gzsl)
     df_train = splits[args.mode]['train']
     df_gal = splits[args.mode]['gal']
 
-args.n_classes = len(df_train['cat'].cat.categories)
-args.n_classes_gal = len(df_gal['cat'].cat.categories)
+if args.dataset == 'cifar-s':
+    args.n_classes = 10
+    args.n_classes_gal = 10
+else:
+    args.n_classes = len(df_train['cat'].cat.categories)
+    args.n_classes_gal = len(df_gal['cat'].cat.categories)
 
 # create experiment folder
 dname = '%s_%s' % (args.dataset, args.mode)
@@ -142,36 +152,98 @@ def main():
     # data loaders
     kwargs = {'num_workers': 8, 'pin_memory': True} if args.cuda else {}
 
-    if args.da:
-        train_transforms = transforms.Compose([
-            random_transform,
-            transforms.ToPILImage(),
-            transforms.Resize((input_size, input_size)),
+
+    if args.dataset == 'cifar-s':
+
+        data_setting = {
+            'train_data_path': args.data_path + '/data/cifar-s/p95.0/train_imgs',
+            'train_label_path': args.data_path + '/data/cifar_train_labels',
+            'test_color_path': args.data_path + '/data/cifar_color_test_imgs',
+            'test_gray_path': args.data_path + '/data/cifar_gray_test_imgs',
+            'test_label_path': args.data_path + '/data/cifar_test_labels',
+            'domain_label_path': args.data_path + '/data/cifar-s/p95.0/train_domain_labels'
+        }
+
+        with open(data_setting['train_data_path'], 'rb') as f:
+            train_array = pickle.load(f)
+
+        mean = tuple(np.mean(train_array / 255., axis=(0, 1, 2)))
+        std = tuple(np.std(train_array / 255., axis=(0, 1, 2)))
+        normalize = transforms.Normalize(mean=mean, std=std)
+
+        if args.da:
+            train_transforms = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize,
+            ])
+        else:
+            train_transforms = transforms.Compose([
+                transforms.ToTensor(),
+                normalize,
+            ])
+
+        test_transforms = transforms.Compose([
             transforms.ToTensor(),
-            normalize])
+            normalize,
+        ])
+
+
+        train_data = CifarDatasetWithDomain(data_setting['train_data_path'],
+                                             data_setting['train_label_path'],
+                                             data_setting['domain_label_path'],
+                                             train_transforms)
+        test_color_data = CifarDatasetWithDomain(data_setting['test_color_path'],
+                                                  data_setting['test_label_path'],
+                                                  data_setting['domain_label_path'],
+                                                  test_transforms)
+        test_gray_data = CifarDatasetWithDomain(data_setting['test_gray_path'],
+                                                 data_setting['test_label_path'],
+                                                 data_setting['domain_label_path'],
+                                                 test_transforms)
+
+        train_loader = torch.utils.data.DataLoader(
+                                 train_data, batch_size=args.batch_size,
+                                 shuffle=True, **kwargs)
+        test_color_loader = torch.utils.data.DataLoader(
+                                      test_color_data, batch_size=args.batch_size,
+                                      shuffle=False, **kwargs)
+        test_gray_loader = torch.utils.data.DataLoader(
+                                     test_gray_data, batch_size=args.batch_size,
+                                     shuffle=False, **kwargs)
+
     else:
-        train_transforms = transforms.Compose([
+        if args.da:
+            train_transforms = transforms.Compose([
+                random_transform,
+                transforms.ToPILImage(),
+                transforms.Resize((input_size, input_size)),
+                transforms.ToTensor(),
+                normalize])
+        else:
+            train_transforms = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.Resize((input_size, input_size)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                normalize])
+
+        test_transforms = transforms.Compose([
             transforms.ToPILImage(),
             transforms.Resize((input_size, input_size)),
-            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             normalize])
 
-    test_transforms = transforms.Compose([
-        transforms.ToPILImage(),
-        transforms.Resize((input_size, input_size)),
-        transforms.ToTensor(),
-        normalize])
+        train_loader = torch.utils.data.DataLoader(
+            DataLoader(df_train, train_transforms,
+                       root=args.data_dir, mode=args.mode),
+            batch_size=args.batch_size, shuffle=True, **kwargs)
 
-    train_loader = torch.utils.data.DataLoader(
-        DataLoader(df_train, train_transforms,
-                   root=args.data_dir, mode=args.mode),
-        batch_size=args.batch_size, shuffle=True, **kwargs)
-
-    test_loader = torch.utils.data.DataLoader(
-        DataLoader(df_gal, test_transforms,
-                   root=args.data_dir, mode=args.mode),
-        batch_size=args.batch_size, shuffle=False, **kwargs)
+        test_loader = torch.utils.data.DataLoader(
+            DataLoader(df_gal, test_transforms,
+                       root=args.data_dir, mode=args.mode),
+            batch_size=args.batch_size, shuffle=False, **kwargs)
 
     # instanciate the models
     output_shape, backbone = get_backbone(args)
@@ -181,10 +253,17 @@ def main():
     # instanciate the proxies
     fsem = get_semantic_fname(args.word)
     path_semantic = os.path.join('aux', 'Semantic', args.dataset, fsem)
-    train_proxies = get_proxies(
-        path_semantic, df_train['cat'].cat.categories)
-    test_proxies = get_proxies(
-        path_semantic, df_gal['cat'].cat.categories)
+    if args.dataset == 'cifar-s':
+        class_names = ['airplane','automobile','bird','cat','deer','dog','frog' ,'horse', 'ship', 'truck']
+        train_proxies = get_proxies(
+            path_semantic, class_names)
+        test_proxies = get_proxies(
+            path_semantic, class_names)
+    else:
+        train_proxies = get_proxies(
+            path_semantic, df_train['cat'].cat.categories)
+        test_proxies = get_proxies(
+            path_semantic, df_gal['cat'].cat.categories)
 
     train_proxynet = ProxyNet(args.n_classes, args.dim_embed,
                               proxies=torch.from_numpy(train_proxies))
@@ -240,10 +319,21 @@ def main():
         train(train_loader, model,
               train_proxynet.proxies.weight, criterion,
               optimizer, epoch, scheduler)
-
-        val_acc = evaluate(
-            test_loader, model,
-            test_proxynet.proxies.weight, criterion)
+        if args.dataset == 'cifar-s':
+            print('\nEval on Cifar color')
+            write_logs('\nEval on Cifar color')
+            val_acc_color = evaluate(
+                test_color_loader, model,
+                test_proxynet.proxies.weight, criterion)
+            print('Eval on Cifar grayscale')
+            write_logs('\nEval on Cifar grayscale')
+            val_acc_gray = evaluate(
+                test_gray_loader, model,
+                test_proxynet.proxies.weight, criterion)
+        else:
+            val_acc = evaluate(
+                test_loader, model,
+                test_proxynet.proxies.weight, criterion)
 
         # saving
         if epoch == args.epochs:
@@ -251,11 +341,23 @@ def main():
                 'epoch': epoch,
                 'state_dict': model.state_dict()})
 
-    print('\nResults on test set (end of training)')
-    write_logs('\nResults on test set (end of training)')
-    test_acc = evaluate(
-        test_loader, model,
-        test_proxynet.proxies.weight, criterion)
+    if args.dataset == 'cifar-s':
+        print('\nEnd - Eval on Cifar color')
+        write_logs('\nEnd - Eval on Cifar color')
+        test_acc_color = evaluate(
+            test_color_loader, model,
+            test_proxynet.proxies.weight, criterion)
+        print('End - Eval on Cifar grayscale')
+        write_logs('\nEnd - Eval on Cifar grayscale')
+        test_acc_gray = evaluate(
+            test_gray_loader, model,
+            test_proxynet.proxies.weight, criterion)
+    else:
+        print('\nResults on test set (end of training)')
+        write_logs('\nResults on test set (end of training)')
+        test_acc = evaluate(
+            test_loader, model,
+            test_proxynet.proxies.weight, criterion)
 
 
 def train(train_loader, model,
