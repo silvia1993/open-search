@@ -101,7 +101,7 @@ def main():
             test_loader = torch.utils.data.DataLoader(
                 DataLoader(df_gal, test_transforms,
                            root=args.data_dir, mode=domain),
-                batch_size=args.batch_size * 10, shuffle=False, **kwargs)
+                batch_size=args.batch_size*5 , shuffle=False, **kwargs)
 
             # instanciate the models
             output_shape, backbone = get_backbone(args)
@@ -155,7 +155,7 @@ def main():
                 train_loader = torch.utils.data.DataLoader(
                     DataLoader(df_train, test_transforms,
                                root=args.data_dir, mode=domain),
-                    batch_size=args.batch_size * 10, shuffle=False, **kwargs)
+                    batch_size=args.batch_size *5 , shuffle=False, **kwargs)
 
                 train_proxies = get_proxies(
                     path_semantic, df_train['cat'].cat.categories)
