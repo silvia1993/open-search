@@ -90,6 +90,9 @@ parser.add_argument('--resume', action='store_true', default=False,
                     help='resume from a ckp')
 parser.add_argument('--ckp_to_resume', type=str, default='',
                     help='path to the model to be resumed ex. /home/../exp/name/')
+parser.add_argument('--repulsion_protected_attributes', action='store_true', default=False,
+                    help='if consider the protected attributes as negative in the proxy loss')
+
 
 warnings.filterwarnings("ignore", category=UserWarning)
 args = parser.parse_args()
@@ -250,7 +253,10 @@ def main():
     fsem = get_semantic_fname(args.word)
     path_semantic = os.path.join('aux', 'Semantic', args.dataset, fsem)
     if args.dataset == 'cifar-s':
-        class_names = ['airplane','automobile','bird','cat','deer','dog','frog' ,'horse', 'ship', 'truck']
+        if args.repulsion_protected_attributes:
+            class_names = ['airplane','automobile','bird','cat','deer','dog','frog' ,'horse', 'ship', 'truck','colorful','grayscale']
+        else:
+            class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
         train_proxies = get_proxies(
             path_semantic, class_names)
         test_proxies = get_proxies(
