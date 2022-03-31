@@ -1,6 +1,7 @@
 import argparse
 import os
 import json
+import warnings
 import numpy as np
 import time
 import torch
@@ -18,7 +19,10 @@ from utils import AverageMeter, to_numpy
 from utils import get_semantic_fname, get_backbone, random_transform
 from validate import extract_predict
 import pickle
+import random
+from log_utils import TensorBoardWrapper
 
+os.environ['WANDB_SILENT']="true"
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch SBIR')
@@ -78,7 +82,16 @@ parser.add_argument('--exp_dir', type=str, default='exp', metavar='ED',
 parser.add_argument('--m', type=str, default='SBIR', metavar='M',
                     help='message')
 
+parser.add_argument('--prefix', type=str, default='prova',
+                    help='prefix of the exp folder')
+parser.add_argument('--freq_save_ckp', type=int, default=50, metavar='N',
+                    help='input batch size for training (default: 128)')
+parser.add_argument('--resume', action='store_true', default=False,
+                    help='resume from a ckp')
+parser.add_argument('--ckp_to_resume', type=str, default='',
+                    help='path to the model to be resumed ex. /home/../exp/name/')
 
+warnings.filterwarnings("ignore", category=UserWarning)
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -121,26 +134,8 @@ else:
     args.n_classes = len(df_train['cat'].cat.categories)
     args.n_classes_gal = len(df_gal['cat'].cat.categories)
 
-# create experiment folder
-dname = '%s_%s' % (args.dataset, args.mode)
-if args.dataset == 'domainnet' and args.mode == 'im':
-    dname = dname + '_' + args.domain
-path = os.path.join(args.exp_dir, dname)
-if not os.path.exists(path):
-    os.makedirs(path)
-
-# saving logs
-with open(os.path.join(path, 'config.json'), 'w') as f:
-    json.dump(args.__dict__, f, indent=4, sort_keys=True)
-
-with open(os.path.join(path, 'logs.txt'), 'w') as f:
-    f.write('Experiment with SBIR\n')
 
 
-def write_logs(txt, logpath=os.path.join(path, 'logs.txt')):
-    with open(logpath, 'a') as f:
-        f.write('\n')
-        f.write(txt)
 
 
 def main():
@@ -250,6 +245,7 @@ def main():
     embed = LinearProjection(output_shape, args.dim_embed)
     model = ConvNet(backbone, embed)
 
+
     # instanciate the proxies
     fsem = get_semantic_fname(args.word)
     path_semantic = os.path.join('aux', 'Semantic', args.dataset, fsem)
@@ -310,6 +306,59 @@ def main():
     scheduler = CosineAnnealingLR(
         optimizer, args.epochs * len(train_loader), eta_min=3e-6)
 
+    if args.resume:
+        if not os.path.exists(args.ckp_to_resume+'checkpoint.pth.tar'):
+            exit('checkpoint does not exist')
+        else:
+            checkpoint = torch.load(args.ckp_to_resume+'checkpoint.pth.tar')
+            args.path = args.ckp_to_resume+'from_epoch_'+str(checkpoint['epoch'])
+            tb_writer = TensorBoardWrapper(args, args.path.split('/')[-2]+'/'+args.path.split('/')[-1])
+            os.makedirs(args.path)
+            print('\nModel at '+args.ckp_to_resume+' restored. Start from epoch '+str(checkpoint['epoch']))
+            write_logs('\nModel at '+args.ckp_to_resume+' restored. Start from epoch '+str(checkpoint['epoch']),args.path+'/logs.txt')
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            scheduler.load_state_dict(checkpoint['scheduler'])
+            print('\nFirst Evaluation')
+            write_logs('\nFirst Evaluation',args.path+'/logs.txt')
+            if args.dataset == 'cifar-s':
+                print('\nEval on Cifar color')
+                write_logs('\nEval on Cifar color',args.path+'/logs.txt')
+                val_acc_color = evaluate(
+                    test_color_loader, model,
+                    test_proxynet.proxies.weight, criterion)
+                tb_writer.add_scalar("Acc Color", val_acc_color, 0)
+
+                print('Eval on Cifar grayscale')
+                write_logs('\nEval on Cifar grayscale',args.path+'/logs.txt')
+                val_acc_gray = evaluate(
+                    test_gray_loader, model,
+                    test_proxynet.proxies.weight, criterion)
+                tb_writer.add_scalar("Acc GrayScale", val_acc_gray, 0)
+    else:
+        # create experiment folder
+        dname = '%s_%s' % (args.dataset, args.mode)
+        if args.dataset == 'domainnet' and args.mode == 'im':
+            dname = dname + '_' + args.domain
+        args.path = os.path.join(args.exp_dir, dname + args.prefix)
+
+        if os.path.exists(args.path):
+            args.path = args.path + '_' + str(random.randint(0, 20000))
+        os.makedirs(args.path)
+    print('Exp folder: ', args.path)
+
+    # saving logs
+    with open(os.path.join(args.path, 'config.json'), 'w') as f:
+        json.dump(args.__dict__, f, indent=4, sort_keys=True)
+
+    with open(os.path.join(args.path, 'logs.txt'), 'w') as f:
+        # TODO capire cos'e' SBIR
+        # f.write('Experiment with SBIR\n')
+        f.write('Exp folder: ' + args.path)
+
+    tb_writer = TensorBoardWrapper(args, args.path.split('/')[-1])
+
+
     print('Starting training...')
     for epoch in range(args.start_epoch, args.epochs + 1):
         # update learning rate
@@ -318,50 +367,58 @@ def main():
         # train for one epoch
         train(train_loader, model,
               train_proxynet.proxies.weight, criterion,
-              optimizer, epoch, scheduler)
+              optimizer, epoch, scheduler,tb_writer)
         if args.dataset == 'cifar-s':
             print('\nEval on Cifar color')
-            write_logs('\nEval on Cifar color')
+            write_logs('\nEval on Cifar color',args.path+'/logs.txt')
             val_acc_color = evaluate(
                 test_color_loader, model,
                 test_proxynet.proxies.weight, criterion)
+            tb_writer.add_scalar("Acc Color", val_acc_color, epoch)
+
             print('Eval on Cifar grayscale')
-            write_logs('\nEval on Cifar grayscale')
+            write_logs('\nEval on Cifar grayscale',args.path+'/logs.txt')
             val_acc_gray = evaluate(
                 test_gray_loader, model,
                 test_proxynet.proxies.weight, criterion)
+            tb_writer.add_scalar("Acc GrayScale", val_acc_gray, epoch)
+
         else:
             val_acc = evaluate(
                 test_loader, model,
                 test_proxynet.proxies.weight, criterion)
 
         # saving
-        if epoch == args.epochs:
+        if epoch%args.freq_save_ckp==0:
+            print('\nCheckpoint saved at epoch ',str(epoch))
+            write_logs('\nCheckpoint saved at epoch '+str(epoch),args.path+'/logs.txt')
             save_checkpoint({
                 'epoch': epoch,
-                'state_dict': model.state_dict()})
+                'optimizer':optimizer.state_dict(),
+                'scheduler':scheduler.state_dict(),
+                'state_dict': model.state_dict()},args.path)
 
     if args.dataset == 'cifar-s':
         print('\nEnd - Eval on Cifar color')
-        write_logs('\nEnd - Eval on Cifar color')
+        write_logs('\nEnd - Eval on Cifar color',args.path+'/logs.txt')
         test_acc_color = evaluate(
             test_color_loader, model,
             test_proxynet.proxies.weight, criterion)
         print('End - Eval on Cifar grayscale')
-        write_logs('\nEnd - Eval on Cifar grayscale')
+        write_logs('\nEnd - Eval on Cifar grayscale',args.path+'/logs.txt')
         test_acc_gray = evaluate(
             test_gray_loader, model,
             test_proxynet.proxies.weight, criterion)
     else:
         print('\nResults on test set (end of training)')
-        write_logs('\nResults on test set (end of training)')
+        write_logs('\nResults on test set (end of training)',args.path+'/logs.txt')
         test_acc = evaluate(
             test_loader, model,
             test_proxynet.proxies.weight, criterion)
 
 
 def train(train_loader, model,
-          proxies, criterion, optimizer, epoch, scheduler):
+          proxies, criterion, optimizer, epoch, scheduler,tb_writer):
     """Training loop for one epoch"""
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -407,24 +464,35 @@ def train(train_loader, model,
         batch_time.update(time.time() - end)
         end = time.time()
 
+    val_loss = val_loss.avg
+    val_acc = val_acc.avg*100.
     txt = ('Epoch [%d] (Time %.2f Data %.2f):\t'
            'Loss %.4f\t Acc %.4f' %
            (epoch, batch_time.avg * i, data_time.avg * i,
-            val_loss.avg, val_acc.avg * 100.))
+            val_loss, val_acc))
+    tb_writer.add_scalar("Loss", val_loss, epoch)
+    tb_writer.add_scalar("Acc", val_acc, epoch)
     print(txt)
-    write_logs(txt)
+    write_logs(txt,args.path+'/logs.txt')
 
+def write_logs(txt, logpath):
+    with open(logpath, 'a') as f:
+        f.write('\n')
+        f.write(txt)
+
+
+def save_checkpoint(state, folder, filename='checkpoint.pth.tar'):
+    torch.save(state, os.path.join(folder, filename))
 
 def evaluate(loader, model, proxies, criterion):
     x, y, acc = extract_predict(loader, model, proxies, criterion)
     txt = ('.. Acc: %.02f\t' % (acc * 100))
     print(txt)
-    write_logs(txt)
+    write_logs(txt,args.path+'/logs.txt')
     return acc
 
 
-def save_checkpoint(state, folder=path, filename='checkpoint.pth.tar'):
-    torch.save(state, os.path.join(path, filename))
+
 
 
 if __name__ == '__main__':
