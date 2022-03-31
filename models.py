@@ -146,10 +146,12 @@ class ProxyNet(nn.Module):
 
 
 class ProxyLoss(nn.Module):
-    def __init__(self, temperature=1.):
+    def __init__(self, args):
         super(ProxyLoss, self).__init__()
 
-        self.temperature = temperature
+        self.args = args
+        self.temperature = args.temperature
+
 
     def forward(self, x, y, proxies):
         """Proxy loss
@@ -158,7 +160,7 @@ class ProxyLoss(nn.Module):
             x (Tensor): batch of features
             y (LongTensor): corresponding instance
         """
-        loss = self.softmax_embedding_loss(x, y, proxies)
+        loss = self.softmax_embedding_loss( x, y, proxies)
 
         preds = self.predict(x, proxies)
 
@@ -169,15 +171,16 @@ class ProxyLoss(nn.Module):
     def softmax_embedding_loss(self, x, y, proxies):
         idx = torch.from_numpy(np.arange(len(x), dtype=np.int)).cuda()
         diff_iZ = cosine_similarity(x, proxies)
-
         numerator_ip = torch.exp(diff_iZ[idx, y] / self.temperature)
-        denominator_ip = torch.exp(diff_iZ / self.temperature).sum(1) + 1e-8
+
+        weight_mask = np.concatenate((np.ones(self.args.n_classes),np.full((len(proxies)-self.args.n_classes),self.args.weight_protected_attributes)))
+        weight_mask = torch.from_numpy(np.tile(weight_mask, (x.shape[0], 1))).cuda()
+        denominator_ip = torch.exp(diff_iZ*weight_mask / self.temperature).sum(1) + 1e-8
         return - torch.log(numerator_ip / denominator_ip)
 
     def classify(self, x, proxies):
         idx = torch.from_numpy(np.arange(len(x), dtype=np.int)).cuda()
-        diff_iZ = cosine_similarity(x, proxies)
-
+        diff_iZ = cosine_similarity(x, proxies[0:self.args.n_classes])
         numerator_ip = torch.exp(diff_iZ[idx, :] / self.temperature)
         denominator_ip = torch.exp(diff_iZ / self.temperature).sum(1) + 1e-8
 

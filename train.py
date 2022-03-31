@@ -92,6 +92,8 @@ parser.add_argument('--ckp_to_resume', type=str, default='',
                     help='path to the model to be resumed ex. /home/../exp/name/')
 parser.add_argument('--repulsion_protected_attributes', action='store_true', default=False,
                     help='if consider the protected attributes as negative in the proxy loss')
+parser.add_argument('--weight_protected_attributes', type=float, default=1.0,
+                    help='weight of the protected attributes in the proxy loss function')
 
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -254,9 +256,9 @@ def main():
     path_semantic = os.path.join('aux', 'Semantic', args.dataset, fsem)
     if args.dataset == 'cifar-s':
         if args.repulsion_protected_attributes:
-            class_names = ['airplane','automobile','bird','cat','deer','dog','frog' ,'horse', 'ship', 'truck','colorful','grayscale']
+            class_names = ['airplane','automobile','bird','cat','deer','dog','frog','horse','ship','truck','colorful','grayscale']
         else:
-            class_names = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+            class_names = ['airplane','automobile','bird','cat','deer','dog','frog','horse','ship','truck']
         train_proxies = get_proxies(
             path_semantic, class_names)
         test_proxies = get_proxies(
@@ -273,7 +275,7 @@ def main():
                              proxies=torch.from_numpy(test_proxies))
 
     # criterion
-    criterion = ProxyLoss(args.temperature)
+    criterion = ProxyLoss(args)
 
     if args.multi_gpu:
         model = nn.DataParallel(model)
